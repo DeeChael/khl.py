@@ -1,8 +1,11 @@
+"""parser: component used in command args handling, convert string token to fit the command signature"""
 import asyncio
 import copy
 import inspect
 import logging
-from typing import Dict, Any, Callable, List
+from typing import Dict, Any, Callable, List, Coroutine
+
+from .. import User, Channel, Client, Message, Role
 
 log = logging.getLogger(__name__)
 
@@ -21,43 +24,78 @@ def _get_param_type(params: List[inspect.Parameter], index: int):
     return result
 
 
+async def _parse_user(_, client, token) -> User:
+    if not (token.startswith("(met)") and token.endswith("(met)")):
+        raise Parser.ParseException(RuntimeError("Failed to parse user"))
+    return await client.fetch_user(token[5:len(token) - 5])
+
+
+async def _parse_channel(_, client, token) -> Channel:
+    if not (token.startswith("(chn)") and token.endswith("(chn)")):
+        raise Parser.ParseException(RuntimeError("Failed to parse channel"))
+    return await client.fetch_public_channel(token[5:len(token) - 5])
+
+
+async def _parse_role(msg, _, token) -> Role:
+    if not (token.startswith("(rol)") and token.endswith("(rol)")):
+        raise Parser.ParseException(RuntimeError("Failed to parse role"))
+    role_id = int(token[5:len(token) - 5])
+    roles = [role for role in (await msg.ctx.guild.fetch_roles()) if role.id == role_id]
+    if len(roles) == 0:
+        raise Parser.ParseException(RuntimeError("Cannot find the role"))
+    return roles[0]
+
+
 class Parser:
     """
     deal with a list of tokens made from Lexer, convert their type to match the command.handler
     """
     _parse_funcs: Dict[Any, Callable] = {
-        str: lambda token: token,
-        int: lambda token: int(token),
-        float: lambda token: float(token)
-        # TODO: tag -> User/Channel/Role...
+        str: lambda msg, client, token: token,
+        int: lambda msg, client, token: int(token),
+        float: lambda msg, client, token: float(token),
+        User: _parse_user,
+        Channel: _parse_channel,
+        Role: _parse_role
     }
 
     def __init__(self):
         self._parse_funcs = copy.copy(Parser._parse_funcs)
 
-    def parse(self, tokens: List[str], params: List[inspect.Parameter]) -> List[Any]:
+    async def parse(
+            self,
+            msg: Message,
+            client: Client,
+            tokens: List[str],
+            params: List[inspect.Parameter]
+    ) -> List[Any]:
         """
         parse tokens into args that types corresponding to handler's requirement
 
+        :param msg: message object
+        :param client: bot client
         :param tokens: output of Lexer.lex()
         :param params: command handlers parameters
         :return: List of args
         :raise: Parser.ArgListLenNotMatch
         """
         ret = []
-        for i in range(len(tokens)):
+        for i, v in enumerate(tokens):
             param_type = _get_param_type(params, i)
 
             if param_type not in self._parse_funcs:
                 raise Parser.ParseFuncNotExists(params[i])
 
             try:
-                ret.append(self._parse_funcs[param_type](tokens[i]))
+                call = self._parse_funcs[param_type](msg, client, v)
+                if isinstance(call, Coroutine):
+                    call = await call
+                ret.append(call)
             except Exception as e:
                 raise Parser.ParseException(e) from e
         return ret
 
-    def register(self, func):  # TODO: global register
+    def register(self, func):
         """
         decorator, register the func into object restricted _parse_funcs()
 
@@ -77,21 +115,27 @@ class Parser:
         return func
 
     class ParserException(Exception):
-        pass
+        """Exception raised in Parser"""
 
     class TooMuchArgs(ParserException):
+        """user passed too many args"""
 
         def __init__(self, expected: int, exact: int, func: Callable):
+            super().__init__()
             self.expected = expected
             self.exact = exact
             self.func = func
 
     class ParseFuncNotExists(ParserException):
+        """cannot parse the string token into the expected type"""
 
         def __init__(self, expected: inspect.Parameter):
+            super().__init__()
             self.expected = expected
 
     class ParseException(ParserException):
+        """misc exception raised in parse process"""
 
         def __init__(self, err: Exception):
+            super().__init__()
             self.err = err
