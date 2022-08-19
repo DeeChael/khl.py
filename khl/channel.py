@@ -9,7 +9,7 @@ from .interface import LazyLoadable
 from .role import Role
 from .types import MessageTypes, ChannelTypes, SlowModeTypes
 from .user import User
-from .util import unpack_value
+from .util import unpack_value, unpack_id
 
 
 class Channel(LazyLoadable, Requestable, ABC):
@@ -214,23 +214,32 @@ class PublicChannel(Channel, ABC):
         v = target.id if isinstance(target, Role) else target
         return await self.gate.exec_req(api.ChannelRole.delete(channel_id=self.id, type=t, value=v))
 
-    async def list_user(self, search: str = None, role: Union[Role, str, int] = None, mobile_verified: bool = None,
-                        active_time: int = None, joined_at: int = None, page: int = 1, page_size: int = 50,
+    async def list_user(self,
+                        search: str = None,
+                        role: Union[Role, str, int] = None,
+                        mobile_verified: bool = None,
+                        active_time: bool = None,
+                        joined_at: bool = None,
+                        page: int = 1,
+                        page_size: int = 50,
                         filter_user_id: str = None) -> List[User]:
+        """list users who can view the channel
+
+        paged req, support standard pagination args"""
         params = {'guild_id': self.guild_id, 'channel_id': self.id, 'page': page, 'page_size': page_size}
         if search is not None:
             params['search'] = search
         if role is not None:
-            params['role_id'] = role.id if isinstance(role, Role) else role
+            params['role_id'] = unpack_id(role)
         if mobile_verified is not None:
-            params['mobile'] = 1 if mobile_verified else 0
-        if active_time is not None and active_time in [0, 1]:
-            params['active_time'] = active_time
-        if joined_at is not None and joined_at in [0, 1]:
-            params['joined_at'] = joined_at
+            params['mobile'] = int(mobile_verified)
+        if active_time is not None:
+            params['active_time'] = int(active_time)
+        if joined_at is not None:
+            params['joined_at'] = int(joined_at)
         if filter_user_id is not None:
             params['filter_user_id'] = filter_user_id
-        users = await self.gate.exec_pagination_req(api.Guild.userList(**params))
+        users = await self.gate.exec_paged_req(api.Guild.userList(**params))
         return [User(_gate_=self.gate, _lazy_loaded_=True, **i) for i in users]
 
 

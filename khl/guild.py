@@ -212,29 +212,35 @@ class Guild(LazyLoadable, Requestable):
             return self._merge_channels()
         raise ValueError('not loaded, please call `await fetch_channel_list()` first')
 
-    async def list_user(self, channel: Union[str, Channel] = None, search: str = None,
-                        role: Union[Role, str, int] = None, mobile_verified: bool = None, active_time: int = None,
-                        joined_at: int = None, page: int = 1, page_size: int = 50, filter_user_id: str = None) -> List[
-        User]:
+    async def list_user(self,
+                        channel: Union[str, Channel] = None,
+                        search: str = None,
+                        role: Union[Role, str, int] = None,
+                        mobile_verified: bool = None,
+                        active_time: bool = None,
+                        joined_at: bool = None,
+                        page: int = 1,
+                        page_size: int = 50,
+                        filter_user_id: str = None) -> List[User]:
         """list users in the guild/a channel belongs to the guild
 
         paged req, support standard pagination args"""
         params = {'guild_id': self.id, 'page': page, 'page_size': page_size}
         if channel is not None:
-            params['channel_id'] = channel if isinstance(channel, str) else channel.id
+            params['channel_id'] = unpack_id(channel)
         if search is not None:
             params['search'] = search
         if role is not None:
-            params['role_id'] = role.id if isinstance(role, Role) else role
+            params['role_id'] = unpack_id(role)
         if mobile_verified is not None:
-            params['mobile'] = 1 if mobile_verified else 0
-        if active_time is not None and active_time in [0, 1]:
-            params['active_time'] = active_time
-        if joined_at is not None and joined_at in [0, 1]:
-            params['joined_at'] = joined_at
+            params['mobile'] = int(mobile_verified)
+        if active_time is not None:
+            params['active_time'] = int(active_time)
+        if joined_at is not None:
+            params['joined_at'] = int(joined_at)
         if filter_user_id is not None:
             params['filter_user_id'] = filter_user_id
-        users = await self.gate.exec_pagination_req(api.Guild.userList(**params))
+        users = await self.gate.exec_paged_req(api.Guild.userList(**params))
         return [User(_gate_=self.gate, _lazy_loaded_=True, **i) for i in users]
 
     async def fetch_joined_channel(self, user: User, page: int = 1, page_size: int = 50) -> List[PublicVoiceChannel]:
@@ -370,6 +376,8 @@ class Guild(LazyLoadable, Requestable):
         return await self.gate.exec_req(api.GuildEmoji.delete(id))
 
     async def fetch_user_status(self, force_update: bool = True) -> GuildUserStatus:
+        """fetch user status list"""
         if force_update or self._user_status is None:
-            self._user_status = GuildUserStatus(**(await self.gate.exec_req(api.Guild.userList(guild_id=self.id, page_size=1))))
+            self._user_status = GuildUserStatus(
+                **(await self.gate.exec_req(api.Guild.userList(guild_id=self.id, page_size=1))))
         return self._user_status
